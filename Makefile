@@ -296,6 +296,7 @@ $(B)/rt/prof_sampler.o: RTFLAGS += -fms-extensions
 $(B)/rt/memscan_os.o: RTFLAGS += -fms-extensions
 
 $(B)/rt/control_places.o: runtime/control_places_data.inc  # (the generated table of shrines, Koroks ...)
+$(B)/rt/pinyin.o: runtime/pinyin_data.inc  # (the hanzi readings, tools/gen_pinyin_table.py)
 
 $(B)/rt/%.o: runtime/%.c $(RT_HDRS)
 	@mkdir -p $(dir $@)
@@ -457,6 +458,7 @@ dist:
 	cp third_party/fonts/NotoSansThai/OFL.txt "$(DIST)/NotoSansThai-OFL.txt"
 	cp third_party/fonts/NotoSansHebrew/NotoSansHebrew-Medium.ttf "$(DIST)/"  # (Hebrew menus, OFL)
 	cp third_party/fonts/NotoSansHebrew/OFL.txt "$(DIST)/NotoSansHebrew-OFL.txt"
+	cp third_party/unihan/LICENSE.txt "$(DIST)/Unihan-LICENSE.txt"
 	cp third_party/FidelityFX/LICENSE.txt "$(DIST)/FidelityFX-LICENSE.txt"  # (AMD FidelityFX SDK, MIT: README "License")
 	if [ -f build/fsr-dlls/amd_fidelityfx_loader_vk.dll ]; then cp build/fsr-dlls/amd_fidelityfx_*_vk.dll \
 	    build/fsr-dlls/AMD-FidelityFX-DLL-LICENSE.txt "$(DIST)/"; fi  # (AMD FSR 4: tools/fetch_fsr_dlls.py; AMD's licence allows binary redistribution with this notice)
@@ -722,6 +724,18 @@ test-mods: $(B)/test_mods
 	$(B)/test_mods
 
 .PHONY: test-mods
+
+# Pinyin for the search fields (runtime/pinyin.c): the readings of a few ordinary Chinese names, and what a search
+# typed on a controller's ASCII on-screen keyboard finds with them
+$(B)/test_pinyin: tools/test_pinyin.c runtime/pinyin.c runtime/pinyin.h runtime/pinyin_data.inc
+	@mkdir -p $(B)
+	$(CC) -O1 -Wall -Wextra -Werror -std=gnu11 -Iruntime -o $@ tools/test_pinyin.c runtime/pinyin.c
+
+test-pinyin: $(B)/test_pinyin
+	$(B)/test_pinyin
+	$(firstword $(PY) python3) tools/test_pinyin_table.py
+
+.PHONY: test-pinyin
 
 $(B)/test_game_file_size: tools/test_game_file_size.c runtime/game_file_size.c runtime/game_file_size.h runtime/game_files.h
 	@mkdir -p $(B)
