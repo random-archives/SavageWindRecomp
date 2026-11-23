@@ -669,6 +669,10 @@ static const int k_upscale_mode_order[UPQ_COUNT] = {
 extern "C" {
 #include "../nvn/output_scale.h"
 }
+// a mode's name: Native is DLAA with DLSS (NVIDIA's name for its 1x)
+static const char *upscale_mode_name(int q) {
+    return upscale_mode_is_dlaa(q) ? "DLAA" : k_upscale_modes[q];
+}
 
 #ifndef SW_METAL
 // Colour (runtime/color_grade.h; vulkan/exec.c scene_post), the Video tab's last section: a preset sets the sliders,
@@ -998,7 +1002,8 @@ static void tab_display(void) {
                                               "graphics cards on Windows. Sharpening sets its own sharpening.");
         uds += std::string("\n\n") + tr("NVIDIA DLSS: like FSR 3, but NVIDIA's machine learning rebuilds the image. For NVIDIA "
                                           "RTX graphics cards on Windows, with NVIDIA's DLSS library, which Savage Wind "
-                                          "Configuration downloads.");
+                                          "Configuration downloads.") +
+               " " + tr("Its DLAA mode keeps the full resolution and only smooths edges.");  // (own key: the one above keeps its translations)
         if (upscaler_available(UPSCALE_XESS))  // (its own paragraph: the ones above keep their translations)
             uds += std::string("\n\n") + tr("Intel XeSS: like FSR 3, but Intel's machine learning rebuilds the image. It runs on "
                                               "every graphics card with DP4a (any recent GPU), with libxess.dll next to the game. "
@@ -1015,7 +1020,8 @@ static void tab_display(void) {
         static int shown = -1;
         int udef = 0;  // (the reset value: UPSCALE_DEFAULT)
         for (int i = 0; i < NU; i++) if (ups_value[i] == UPSCALE_DEFAULT) udef = i;
-        if (opt_choice_avail("Upscaler", &ui, &shown, ups, avail, NU, udef, ud)) g_settings.upscaler = ups_value[ui];
+        if (opt_choice_avail("Upscaler", &ui, &shown, ups, avail, NU, udef, ud))
+            g_settings.upscaler = ups_value[ui], render_scale_fit();  // (FSR 3 / 4, XeSS, DLSS: up to 100%)
         // its mode (AMD's scale factors, or Dynamic: the dynamic resolution), one step in; greyed when the upscaler
         // is off
         bool modes_ok = upscale_modes_available();
@@ -1026,8 +1032,8 @@ static void tab_display(void) {
         int mi = 2, mdef = 2;  // UPQ_QUALITY's position in k_upscale_mode_order
         for (int i = 0; i < nm; i++) {
             int q = k_upscale_mode_order[i];
-            mode_names[i] = modes_ok ? tr(k_upscale_modes[q])
-                                     : std::string(tr(k_upscale_modes[q])) + " " + tr("(coming soon)");
+            mode_names[i] = modes_ok ? tr(upscale_mode_name(q))
+                                     : std::string(tr(upscale_mode_name(q))) + " " + tr("(coming soon)");
             mn[i] = mode_names[i].c_str();
             mavail[i] = modes_ok && upscale_mode_offered(q);
             if (q == g_settings.upscale_quality) mi = i;
@@ -1037,9 +1043,15 @@ static void tab_display(void) {
         renderer_get_scene_scale(&sx, &sy);
         char rendering[100];
         snprintf(rendering, sizeof rendering, tr("Rendering at %.0f x %.0f."), 1600.0 * sx, 900.0 * sy);
-        std::string md = std::string(tr("How much smaller the game renders before the upscaler brings it to the window, "
-                                        "on each side: Native 1x (FSR 3/4), Ultra Quality 1.3x, Quality 1.5x, Balanced "
-                                        "1.7x, Performance 2x, Ultra Performance 3x. Smaller is faster and softer.")) +
+        // (the first mode by the name the row gives it: DLAA with DLSS)
+        std::string md = std::string(upscale_mode_is_dlaa(UPQ_NATIVE)
+                                         ? tr("How much smaller the game renders before the upscaler brings it to the "
+                                              "window, on each side: DLAA 1x, Ultra Quality 1.3x, Quality 1.5x, Balanced "
+                                              "1.7x, Performance 2x, Ultra Performance 3x. Smaller is faster and softer.")
+                                         : tr("How much smaller the game renders before the upscaler brings it to the "
+                                              "window, on each side: Native 1x (FSR 3, FSR 4 and XeSS), Ultra Quality "
+                                              "1.3x, Quality 1.5x, Balanced 1.7x, Performance 2x, Ultra Performance 3x. "
+                                              "Smaller is faster and softer.")) +
                          "\n\n" + tr("Dynamic: renders the 3D scene smaller when frames are slow, sharper when they "
                                      "aren't; stays full size where that gains nothing.") +
                          "\n\n" + (modes_ok ? rendering : tr("Coming in a later version."));
@@ -1047,7 +1059,7 @@ static void tab_display(void) {
         if (g_settings.upscaler == UPSCALE_OFF) opt_disable_next();
         static int mshown = -1;
         if (opt_choice_avail("Upscaler mode", &mi, &mshown, mn, mavail, nm, mdef, md.c_str()))
-            g_settings.upscale_quality = k_upscale_mode_order[mi];
+            g_settings.upscale_quality = k_upscale_mode_order[mi], render_scale_fit();  // (Native, DLAA: 100%)
         opt_indent(-1);
     }
 #ifdef SW_METAL
@@ -1063,8 +1075,16 @@ static void tab_display(void) {
                            "edges and blends only along them, so textures stay sharp. Most useful with an upscaler.")) +
             " " + tr("TAA: blends each frame with the ones before it, following the game's motion, so edges stay "
                      "smooth and stop shimmering; slightly softer, use it with Sharpening.");
-        int row = settings_aa_row();
-        if (opt_choice("Anti-aliasing", &row, aa, AA_ROW_COUNT, AA_ROW_FXAA, d.c_str())) settings_aa_row_set(row);
+        if (rt_temporal_upscaler()) {  // (FSR 3 / 4, XeSS, DLSS smooth edges themselves: the row shows the upscaler, greyed)
+            const char *one[] = {rt_temporal_upscaler_name()};
+            int z = 0;
+            d += std::string(" ") + tr("Off while FSR 3, FSR 4, XeSS or DLSS is on: they smooth edges themselves.");
+            opt_disable_next();
+            opt_choice("Anti-aliasing", &z, one, 1, 0, d.c_str());
+        } else {
+            int row = settings_aa_row();
+            if (opt_choice("Anti-aliasing", &row, aa, AA_ROW_COUNT, AA_ROW_FXAA, d.c_str())) settings_aa_row_set(row);
+        }
     }
     // the wet lighting passes' sun glare (maxwell/translate.c maxwell_wet_lighting)
     opt_toggle("Wet grass fix", &g_settings.wet_fix, false,
@@ -1072,12 +1092,23 @@ static void tab_display(void) {
                "glare goes, and the grass keeps its colour and a soft sheen. Applies from the next start.");
 #endif
     {   // supersampling (nvn/output_scale.c): applies at once
+        // (FSR 3 / 4, XeSS, DLSS: up to 100%, in Native and DLAA 100%: output_scale.c render_scale_offered; the sentence
+        //  on its own, the first keeps its translations)
         static const char *const rscale[] = {"50%", "75%", "100%", "125%", "150%", "200%"};
-        opt_choice("Render scale", &g_settings.render_scale, rscale, RSCALE_COUNT, RSCALE_100,
-                   "Below 100% the game renders at a lower resolution than the window and is scaled up to it: faster, "
-                   "but blurrier (50% is a quarter of the pixels, for weak graphics cards). Above 100% it renders at a "
-                   "higher resolution and is scaled down to it, the cleanest way to smooth edges and shimmer. 200% is "
-                   "4x the pixels: for fast graphics cards.", false);
+        render_scale_fit();  // (a value stored before shows as the 100% it runs at)
+        bool ravail[RSCALE_COUNT];
+        for (int i = 0; i < RSCALE_COUNT; i++) ravail[i] = render_scale_offered(i);
+        std::string rd = tr("Below 100% the game renders at a lower resolution than the window and is scaled up to it: "
+                            "faster, but blurrier (50% is a quarter of the pixels, for weak graphics cards). Above 100% "
+                            "it renders at a higher resolution and is scaled down to it, the cleanest way to smooth edges "
+                            "and shimmer. 200% is 4x the pixels: for fast graphics cards.");
+        if (rt_temporal_upscaler())
+            rd += std::string(" ") + tr("With FSR 3, FSR 4, XeSS or DLSS it stops at 100%, because they can't use an "
+                                        "image bigger than the window. In Native and DLAA modes it's always 100%.");
+        static int rshown = -1;
+        if (opt_choice_avail("Render scale", &g_settings.render_scale, &rshown, rscale, ravail, RSCALE_COUNT, RSCALE_100,
+                             rd.c_str(), false))
+            render_scale_chosen();
     }
 #ifndef SW_METAL
     {   // Anisotropic filtering and sharpening (Vulkan: vulkan/textures.c sampler_aniso, vulkan/exec.c scene_post)
@@ -2038,10 +2069,12 @@ static void perf_overlay_draw(ImGuiIO &io, float scale) {
         line += std::string(" ") + (q >= 0 && q < UPQ_COUNT ? std::string(tr(k_upscale_modes[q])) + " " : "") + f + "x";
     } else if (q == UPQ_DYNAMIC) {
         line += std::string(" ") + tr("Dynamic");
+    } else if (up == UPSCALE_DLSS && upscale_mode_is_dlaa(q)) {
+        line += std::string(" ") + tr("DLAA");
     }
     // (FSR 3 / 4 and DLSS anti-alias the scene themselves: the setting does nothing then)
     int aa = rt_antialias();
-    line += std::string(" | ") + tr("Anti-aliasing") + ": " + (rt_fsr4() ? tr("FSR 4") : rt_fsr3() ? tr("FSR 3") : rt_dlss() ? tr("DLSS") : rt_xess() ? tr("XeSS") : aa == AA_TAA ? tr("TAA") : aa == AA_SMAA ? tr("SMAA") : g_settings.game_fxaa ? "FXAA" : tr("Off"));
+    line += std::string(" | ") + tr("Anti-aliasing") + ": " + (rt_temporal_upscaler() ? tr(rt_temporal_upscaler_name()) : aa == AA_TAA ? tr("TAA") : aa == AA_SMAA ? tr("SMAA") : g_settings.game_fxaa ? "FXAA" : tr("Off"));
     ImGui::TextDisabled("%s", line.c_str());
     line.clear();
 #ifndef SW_METAL
